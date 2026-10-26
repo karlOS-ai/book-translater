@@ -237,6 +237,36 @@ def shard_of(k):
     return c + b
 
 
+PARTICLES = {'up', 'down', 'out', 'off', 'on', 'in', 'away', 'back', 'over', 'through', 'around', 'about', 'along', 'by',
+             'for', 'after', 'into', 'across', 'apart', 'ahead', 'forward', 'together', 'with'}
+
+
+def write_core():
+    """src/core-en.json.gz: the everyday part of the English → German index (words with a wordfreq
+    Zipf value of at least 1.5, phrasal verbs and their inflected forms), slimmed down so tools/build.mjs
+    can embed it in the claude.ai page. That page then needs no network to look words up."""
+    en = {}
+    for f in os.listdir(OUT):
+        if f.startswith('en-') and f.endswith('.json'):
+            with open(os.path.join(OUT, f), encoding='utf-8') as fh: en.update(json.load(fh))
+    core = {}
+    for k, e in en.items():
+        if 's' not in e: continue
+        w = k.split()
+        if len(w) == 1 and zipf(k, 'en') >= 1.5: n_s, n_syn, n_p = 5, 4, 2
+        elif len(w) in (2, 3) and w[1] in PARTICLES and zipf(w[0], 'en') >= 3: n_s, n_syn, n_p = 4, 3, 1
+        else: continue
+        o = {'s': [[pos, '; '.join(tr.split('; ')[:n_syn])] for pos, tr, *_ in e['s'][:n_s]]}
+        if e.get('p'): o['p'] = e['p'][:n_p]
+        core[k] = o
+    for k, e in en.items():
+        if 'l' in e and e['l'] in core: core[k] = {'l': e['l']}
+    raw = json.dumps(core, ensure_ascii=False, separators=(',', ':')).encode()
+    path = os.path.join(os.path.dirname(OUT), '..', 'src', 'core-en.json.gz')
+    with open(path, 'wb') as f: f.write(gzip.compress(raw, 9, mtime=0))
+    print('core', len(core), 'keys', round(os.path.getsize(path) / 1e6, 2), 'MB')
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     for f in os.listdir(OUT):
@@ -251,6 +281,7 @@ def main():
                 f.write(raw)
             total += len(gzip.compress(raw, 6))
         print(direction, sum(len(d) for d in shards.values()), 'keys')
+    write_core()
     with open(os.path.join(OUT, 'LICENSE.txt'), 'w') as f:
         f.write('Wörterbuchdaten: Ding English–German dictionary, (c) Frank Richter, TU Chemnitz, 1995–2023.\n'
                 'https://dict.tu-chemnitz.de/ — GNU General Public License, Version 2 oder später.\n')

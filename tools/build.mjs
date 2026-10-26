@@ -82,4 +82,10 @@ writeFileSync(join(root, 'docs/index.html'), html);
 writeFileSync(join(root, 'docs/sw.js'), sw);
 writeFileSync(join(root, 'docs/manifest.webmanifest'), JSON.stringify(manifest, null, 2) + '\n');
 writeFileSync(join(root, 'docs/.nojekyll'), '');
-console.log('built docs/ version', version);
+
+// claude.ai page: the same app plus the everyday dictionary embedded (src/core-en.json.gz, from tools/build_dict.py),
+// because a page there may not be able to download files. Publish build/artifact.html to the existing artifact URL.
+mkdirSync(join(root, 'build'), { recursive: true });
+const core = readFileSync(join(root, 'src/core-en.json.gz')).toString('base64');
+writeFileSync(join(root, 'build/artifact.html'), src.trimEnd() + `\n<script type="text/plain" id="core-dict">${core}</script>\n`);
+console.log('built docs/ and build/artifact.html, version', version, '· embedded dictionary', (core.length / 1e6).toFixed(2), 'MB');

@@ -955,7 +955,7 @@ async function myMemoryTranslate(text, from, to) {
   return o;
 }
 /* ---------- offline dictionary: Ding (TU Chemnitz), split into shards in dict/ and loaded on demand ---------- */
-const DICT = { shards: new Map() };
+const DICT = { shards: new Map(), downUntil: 0 };
 const FOLD = { 'ä': 'a', 'ö': 'o', 'ü': 'u', 'ß': 's', 'é': 'e', 'è': 'e', 'à': 'a' };
 // first letter + bucket of the second letter; must match shard_of() in tools/build_dict.py
 function shardName(lang, k) {
@@ -965,10 +965,30 @@ function shardName(lang, k) {
   const b = !(c2 >= 'a' && c2 <= 'z') || c2 < 'g' ? 'a' : c2 < 'n' ? 'g' : c2 < 't' ? 'n' : 't';
   return `${lang}-${c}${b}`;
 }
+// The everyday vocabulary is embedded in the claude.ai page (tools/build.mjs), so lookups need no network there.
+let CORE = null;
+function loadCore() {
+  if (!CORE) CORE = (async () => {
+    const el = document.getElementById('core-dict');
+    if (!el) return null;
+    if (typeof DecompressionStream !== 'function') throw new Error('gzip unsupported');
+    const b64 = el.textContent.replace(/\s+/g, '');
+    const bin = new Uint8Array(b64.length * 3 / 4 - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0));
+    const str = atob(b64);
+    for (let i = 0; i < bin.length; i++) bin[i] = str.charCodeAt(i);
+    const text = await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    return JSON.parse(text);
+  })().catch(e => { console.warn('core dictionary', e); return null; });
+  return CORE;
+}
 function loadShard(name) {
+  if (DICT.downUntil > now()) return Promise.reject(new Error('dictionary files unreachable'));
   if (!DICT.shards.has(name)) {
     const p = (async () => {
-      const res = await fetch(`dict/${name}.json`);
+      const ctl = new AbortController();
+      const tm = setTimeout(() => ctl.abort(), 5000);
+      let res;
+      try { res = await fetch(`dict/${name}.json`, { signal: ctl.signal }); } finally { clearTimeout(tm); }
       if (!res.ok) throw new Error('dict ' + res.status);
       const buf = new Uint8Array(await res.arrayBuffer());
       let text;
@@ -978,12 +998,18 @@ function loadShard(name) {
       } else text = new TextDecoder().decode(buf); // the server already unpacked it
       return JSON.parse(text);
     })();
-    p.catch(() => DICT.shards.delete(name));
+    // after a failed download stop trying for a minute, so a lookup does not wait on every guess
+    p.catch(() => { DICT.shards.delete(name); DICT.downUntil = now() + 60 * 1000; });
     DICT.shards.set(name, p);
   }
   return DICT.shards.get(name);
 }
-async function dictEntry(lang, k) { return k ? ((await loadShard(shardName(lang, k)))[k] || null) : null; }
+async function dictEntry(lang, k) {
+  if (!k) return null;
+  if (lang === 'en') { const core = await loadCore(); if (core && core[k]) return core[k]; }
+  try { return (await loadShard(shardName(lang, k)))[k] || null; }
+  catch (e) { if (lang === 'en' && await loadCore()) return null; throw e; }
+}
 // Base-form guesses for words the dictionary does not list as inflections itself.
 function enCandidates(k) {
   const c = [k];
@@ -2207,6 +2233,7 @@ function boot() {
   $('#mic-wrap').hidden = !(SR && !window.claude);
   handleIncoming();
   CAP.ready.then(() => renderAll());
+  setTimeout(loadCore, 50);
   connectCloud();
   if (navigator.storage && navigator.storage.persist && !window.claude) navigator.storage.persist().catch(() => {});
   document.addEventListener('visibilitychange', () => {
