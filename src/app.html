@@ -1296,7 +1296,7 @@ src.addEventListener('input', () => {
   if (!src.value.trim()) { resetResult(); updateSrcTools(); return; }
   updateSrcTools();
   clearTimeout(liveTimer);
-  if (T.live) liveTimer = setTimeout(() => runTranslate(false), framed ? 300 : 600);
+  if (T.live) liveTimer = setTimeout(() => runTranslate(false), 220);
 });
 src.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); commit(); src.blur(); }
@@ -2183,19 +2183,40 @@ async function pasteClipboard() {
   catch { toast('Einfügen nicht erlaubt – halte das Feld gedrückt und wähle „Einsetzen“'); src.focus(); }
 }
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recog = null;
+let recog = null, micTimer = 0;
+// iOS home-screen apps often never fire "end", so the button resets itself instead of waiting for the browser
+function micOff() {
+  clearTimeout(micTimer);
+  const r = recog; recog = null;
+  const b = $('#mic-btn'); b.classList.remove('live'); b.setAttribute('aria-label', 'Sprechen');
+  if (r) { r.onresult = r.onend = r.onerror = null; try { r.abort(); } catch { /* already stopped */ } }
+}
+function micFinish() { const had = !!src.value.trim(); micOff(); if (had) commit(); }
 function toggleMic() {
   if (!SR) return;
-  if (recog) { try { recog.stop(); } catch { /* ignore */ } return; }
+  if (recog) { micFinish(); return; }
   try {
-    recog = new SR();
-    recog.lang = dirs().from === 'en' ? S.settings.accent : 'de-DE';
-    recog.interimResults = true; recog.maxAlternatives = 1;
-    recog.onresult = ev => { const r = [...ev.results].map(x => x[0].transcript).join(' '); src.value = r; autosize(); updateSrcTools(); if (ev.results[ev.results.length - 1].isFinal) commit(); };
-    recog.onend = () => { recog = null; $('#mic-btn').classList.remove('live'); };
-    recog.onerror = () => { recog = null; $('#mic-btn').classList.remove('live'); toast('Mikrofon nicht verfügbar'); };
-    recog.start(); $('#mic-btn').classList.add('live');
-  } catch { recog = null; toast('Spracheingabe nicht verfügbar'); }
+    const r = new SR(); recog = r;
+    r.lang = dirs().from === 'en' ? S.settings.accent : 'de-DE';
+    r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+    const wait = ms => { clearTimeout(micTimer); micTimer = setTimeout(micFinish, ms); };
+    r.onresult = ev => {
+      if (recog !== r) return;
+      src.value = [...ev.results].map(x => x[0].transcript).join(' ');
+      autosize(); updateSrcTools();
+      if (ev.results[ev.results.length - 1].isFinal) micFinish(); else wait(1800);
+    };
+    r.onend = () => { if (recog === r) micFinish(); };
+    r.onerror = e => {
+      if (recog !== r) return;
+      micOff();
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('Mikrofon ist für diese App nicht erlaubt');
+      else if (e.error !== 'aborted' && e.error !== 'no-speech') toast('Spracheingabe gerade nicht verfügbar');
+    };
+    r.start();
+    const b = $('#mic-btn'); b.classList.add('live'); b.setAttribute('aria-label', 'Aufnahme beenden');
+    wait(7000); // nothing heard: stop on its own
+  } catch { micOff(); toast('Spracheingabe nicht verfügbar'); }
 }
 
 function paintStaticIcons() {
@@ -2237,7 +2258,7 @@ function boot() {
   connectCloud();
   if (navigator.storage && navigator.storage.persist && !window.claude) navigator.storage.persist().catch(() => {});
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') { store.set('vt.words', S.words); store.set('vt.stats', S.stats); store.set('vt.settings', S.settings); }
+    if (document.visibilityState === 'hidden') { micOff(); store.set('vt.words', S.words); store.set('vt.stats', S.stats); store.set('vt.settings', S.settings); }
     else renderAll();
   });
   // re-render once an hour so due counts stay right when the app stays open

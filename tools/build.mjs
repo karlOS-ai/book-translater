@@ -13,7 +13,11 @@ const split = src.indexOf('<div id="app">');
 if (split < 0) throw new Error('src/app.html: <div id="app"> not found');
 const head = src.slice(0, split).replace(/<meta name="claude:[^>]*>\s*/g, '');
 const body = src.slice(split);
-const version = createHash('sha1').update(src).digest('hex').slice(0, 10);
+// the everyday dictionary (src/core-en.json.gz, from tools/build_dict.py) is embedded in both pages, so a word
+// lookup never waits for a download; rarer words still come from docs/dict/
+const core = readFileSync(join(root, 'src/core-en.json.gz')).toString('base64');
+const coreTag = `<script type="text/plain" id="core-dict">${core}</script>`;
+const version = createHash('sha1').update(src).update(core).digest('hex').slice(0, 10);
 
 const html = `<!doctype html>
 <html lang="de">
@@ -34,6 +38,7 @@ ${head.trim()}
 </head>
 <body>
 ${body.trim()}
+${coreTag}
 <script>
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js?v=${version}').catch(() => {});
 </script>
@@ -53,7 +58,9 @@ self.addEventListener('fetch', e => {
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(isPage ? 'index.html' : e.request, { ignoreSearch: isPage });
-    const net = fetch(e.request).then(r => { if (r.ok && !isPage) cache.put(e.request, r.clone()); if (r.ok && isPage) cache.put('index.html', r.clone()); return r; }).catch(() => null);
+    const net = fetch(e.request).then(r => { if (r.ok) cache.put(isPage ? 'index.html' : e.request, r.clone()); return r; }).catch(() => null);
+    // the page: fresh from the network when it answers quickly, so updates show at once; files: cache first
+    if (isPage && hit) return (await Promise.race([net, new Promise(r => setTimeout(() => r(null), 2500))])) || hit;
     return hit || (await net) || new Response('Offline', { status: 503 });
   })());
 });
@@ -83,9 +90,8 @@ writeFileSync(join(root, 'docs/sw.js'), sw);
 writeFileSync(join(root, 'docs/manifest.webmanifest'), JSON.stringify(manifest, null, 2) + '\n');
 writeFileSync(join(root, 'docs/.nojekyll'), '');
 
-// claude.ai page: the same app plus the everyday dictionary embedded (src/core-en.json.gz, from tools/build_dict.py),
-// because a page there may not be able to download files. Publish build/artifact.html to the existing artifact URL.
+// claude.ai page: the same app with the embedded dictionary; a page there may not be able to download files.
+// Publish build/artifact.html to the existing artifact URL.
 mkdirSync(join(root, 'build'), { recursive: true });
-const core = readFileSync(join(root, 'src/core-en.json.gz')).toString('base64');
-writeFileSync(join(root, 'build/artifact.html'), src.trimEnd() + `\n<script type="text/plain" id="core-dict">${core}</script>\n`);
+writeFileSync(join(root, 'build/artifact.html'), src.trimEnd() + `\n${coreTag}\n`);
 console.log('built docs/ and build/artifact.html, version', version, '· embedded dictionary', (core.length / 1e6).toFixed(2), 'MB');
