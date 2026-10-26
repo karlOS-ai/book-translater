@@ -4,7 +4,7 @@ Englische Bücher lesen und die Vokabeln dabei gleich lernen. Die App sieht aus 
 Apple-Übersetzer, speichert aber jedes nachgeschlagene Wort automatisch und fragt es später mit
 Karteikarten nach einem Wiederholungsplan ab.
 
-**App öffnen:** https://karlos-ai.github.io/book-translater/
+**App öffnen:** https://karlos-ai.github.io/book-translator/
 (auf dem iPhone in Safari öffnen → Teilen → „Zum Home-Bildschirm“)
 
 ![Übersetzen, Karteikarte und Vokabelliste](.github/screenshots.png)

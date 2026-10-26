@@ -1869,7 +1869,7 @@ function renderVocab() {
   }).sort((a, b) => (b.created || 0) - (a.created || 0));
   const wrap = $('#vocab-wrap');
   if (!S.words.length) {
-    wrap.innerHTML = `<div class="empty"><div class="big">${I.starFill}</div><h3>Noch keine Vokabeln</h3>Jedes Wort, das du übersetzt, wird hier automatisch gespeichert – mit Aussprache, Beispielsatz und dem Satz aus deinem Buch.<div style="margin-top:18px"><button class="btn tinted" data-tab-go="translate">Erstes Wort übersetzen</button></div></div>`;
+    wrap.innerHTML = `<div class="empty"><div class="big">${I.starFill}</div><h3>Noch keine Vokabeln</h3>Jedes Wort, das du übersetzt, wird hier automatisch gespeichert – mit Aussprache, Beispielsatz und dem Satz aus deinem Buch.<div style="margin-top:18px"><button class="btn tinted" data-tab-go="translate">Erstes Wort übersetzen</button><button class="btn gray" data-act="settings">Vokabeln aus anderer App einfügen</button></div></div>`;
     return;
   }
   if (!list.length) { wrap.innerHTML = `<div class="empty">${q ? `Keine Treffer für „${esc(S.query)}“.` : 'In dieser Liste ist gerade nichts.'}</div>`; return; }
@@ -1971,7 +1971,7 @@ function startSingle(w) {
    Settings
    ===================================================================== */
 function openSettings() {
-  let confirmWipe = false;
+  let confirmWipe = false, pasteBox = false;
   const sh = openSheet({ title: 'Einstellungen', tall: true, right: { label: 'Fertig' } });
   const paint = () => {
     const st = S.settings;
@@ -2002,6 +2002,13 @@ function openSettings() {
         <button class="row action" data-act="s-export-csv">${I.down.replace('class="ic"', 'class="ic ic-s"')}<span>Für Anki / Excel exportieren (CSV)</span></button>
         <label class="row action" style="cursor:pointer">${I.up.replace('class="ic"', 'class="ic ic-s"')}<span>Backup importieren</span><input type="file" id="s-import" accept="application/json,.json" class="vh"></label>
       </div>
+      <div class="list-h">In eine andere App übertragen</div>
+      <div class="list">
+        <button class="row action" data-act="s-copy-all">${I.copy.replace('class="ic"', 'class="ic ic-s"')}<span>Vokabeln kopieren</span></button>
+        <button class="row action" data-act="s-paste-all">${I.paste.replace('class="ic"', 'class="ic ic-s"')}<span>Vokabeln einfügen</span></button>
+      </div>
+      ${pasteBox ? `<div class="card" style="margin-top:10px"><label for="s-paste-text" class="list-f" style="display:block;margin:0 0 6px">Halte das Feld gedrückt und wähle „Einsetzen“:</label><textarea id="s-paste-text" rows="3" style="width:100%;box-sizing:border-box;border:0;outline:0;background:var(--fill);border-radius:8px;padding:8px;font-size:15px;color:var(--label);resize:none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea><button class="btn primary" data-act="s-paste-apply" style="margin-top:10px;height:44px">Übernehmen</button></div>` : ''}
+      <p class="list-f">Zum Umziehen: hier „Vokabeln kopieren“, dann in der neuen App unter Einstellungen „Vokabeln einfügen“. Lernstand und Statistik kommen mit.</p>
       <div class="list" style="margin-top:22px"><button class="row danger" data-act="s-wipe">Alle Vokabeln löschen</button></div>
       ${confirmWipe ? `<div class="confirm"><p>Wirklich alle ${S.words.length} Vokabeln und den Lernfortschritt löschen? Das lässt sich nicht rückgängig machen.</p><div class="two"><button class="btn gray" data-act="s-wipe-no">Abbrechen</button><button class="btn red" data-act="s-wipe-yes">Alles löschen</button></div></div>` : ''}
       <div class="list-h">Schneller nachschlagen beim Lesen</div>
@@ -2029,6 +2036,12 @@ function openSettings() {
     else if (a === 's-test') speak('reluctant', 'en');
     else if (a === 's-export-json') exportData('json');
     else if (a === 's-export-csv') exportData('csv');
+    else if (a === 's-copy-all') copyAllWords();
+    else if (a === 's-paste-all') pasteAllWords().then(ok => { if (!ok) { pasteBox = true; paint(); setTimeout(() => $('#s-paste-text', sh.el)?.focus(), 50); } else paint(); });
+    else if (a === 's-paste-apply') {
+      const t = $('#s-paste-text', sh.el)?.value || '';
+      try { importToast(importText(t)); pasteBox = false; paint(); } catch { toast('Das sind keine kopierten Vokabeln'); }
+    }
     else if (a === 's-wipe') { confirmWipe = true; paint(); }
     else if (a === 's-wipe-no') { confirmWipe = false; paint(); }
     else if (a === 's-wipe-yes') { [...S.words].forEach(w => removeWord(w.id)); confirmWipe = false; paint(); renderAll(); toast('Alle Vokabeln gelöscht'); }
@@ -2058,28 +2071,44 @@ function exportData(kind) {
     saveFile(`vokabeln-${stamp}.csv`, '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n'), 'text/csv');
   }
 }
+// Merges a backup (export file or copied text) into the list; words that already exist are kept as they are.
+function importText(text) {
+  const data = JSON.parse(String(text).trim());
+  const list = Array.isArray(data) ? data : data && data.words;
+  if (!Array.isArray(list)) throw new Error('format');
+  let added = 0, skipped = 0;
+  for (const raw of list) {
+    if (!raw || !raw.en || !raw.de) { skipped++; continue; }
+    if (findByKey(keyOf(raw.en))) { skipped++; continue; }
+    const w = { ...raw, id: raw.id && !findById(raw.id) ? String(raw.id) : mkId(), srs: { ...newSrs(), ...(raw.srs || {}) }, created: raw.created || now() };
+    delete w._synced;
+    saveWord(w, { touch: true }); added++;
+  }
+  if (data.stats && data.stats.days) { for (const [k, v] of Object.entries(data.stats.days)) if (!S.stats.days[k]) S.stats.days[k] = v; saveStats(); }
+  renderAll();
+  return { added, skipped };
+}
+const importToast = ({ added, skipped }) => toast(`${added} ${added === 1 ? 'Vokabel' : 'Vokabeln'} übernommen${skipped ? `, ${skipped} schon vorhanden` : ''}`, 'check');
 function importFile(file, done) {
   if (!file) return;
   const fr = new FileReader();
   fr.onload = () => {
-    try {
-      const data = JSON.parse(String(fr.result));
-      const list = Array.isArray(data) ? data : data.words;
-      if (!Array.isArray(list)) throw new Error('format');
-      let added = 0, skipped = 0;
-      for (const raw of list) {
-        if (!raw || !raw.en || !raw.de) { skipped++; continue; }
-        if (findByKey(keyOf(raw.en))) { skipped++; continue; }
-        const w = { ...raw, id: raw.id && !findById(raw.id) ? String(raw.id) : mkId(), srs: { ...newSrs(), ...(raw.srs || {}) }, created: raw.created || now() };
-        delete w._synced;
-        saveWord(w, { touch: true }); added++;
-      }
-      if (data.stats && data.stats.days) { for (const [k, v] of Object.entries(data.stats.days)) if (!S.stats.days[k]) S.stats.days[k] = v; saveStats(); }
-      toast(`${added} importiert${skipped ? `, ${skipped} übersprungen` : ''}`, 'check');
-      renderAll(); done && done();
-    } catch { toast('Diese Datei ist kein gültiges Backup'); }
+    try { importToast(importText(fr.result)); done && done(); }
+    catch { toast('Diese Datei ist kein gültiges Backup'); }
   };
   fr.readAsText(file);
+}
+const backupJson = () => JSON.stringify({ app: 'vokabel-uebersetzer', version: 1, exported: new Date().toISOString(), words: S.words.map(clean), stats: S.stats });
+async function copyAllWords() {
+  if (!S.words.length) { toast('Noch keine Vokabeln zum Kopieren'); return; }
+  try { await navigator.clipboard.writeText(backupJson()); toast(`${S.words.length} Vokabeln kopiert – jetzt in der anderen App einfügen`, 'check'); }
+  catch { toast('Kopieren ist hier nicht möglich – nimm „Backup exportieren“'); }
+}
+// returns true when it imported straight from the clipboard; false means: show the paste box
+async function pasteAllWords() {
+  if (!(navigator.clipboard && navigator.clipboard.readText) || window.claude) return false;
+  try { importToast(importText(await navigator.clipboard.readText())); return true; }
+  catch { return false; }
 }
 
 /* =====================================================================

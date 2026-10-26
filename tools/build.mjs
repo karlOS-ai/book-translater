@@ -60,7 +60,8 @@ self.addEventListener('fetch', e => {
     const hit = await cache.match(isPage ? 'index.html' : e.request, { ignoreSearch: isPage });
     const net = fetch(e.request).then(r => { if (r.ok) cache.put(isPage ? 'index.html' : e.request, r.clone()); return r; }).catch(() => null);
     // the page: fresh from the network when it answers quickly, so updates show at once; files: cache first
-    if (isPage && hit) return (await Promise.race([net, new Promise(r => setTimeout(() => r(null), 2500))])) || hit;
+    // (a 404 — e.g. after the repository was renamed — keeps showing the saved app, so its words stay reachable)
+    if (isPage && hit) { const r = await Promise.race([net, new Promise(r => setTimeout(() => r(null), 2500))]); return r && r.ok ? r : hit; }
     return hit || (await net) || new Response('Offline', { status: 503 });
   })());
 });
